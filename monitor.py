@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import logging
+from watchdog.utils import has_attribute
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -34,8 +35,7 @@ except Exception as e:
 
 class MonitorFolder(FileSystemEventHandler):
 
-    FOLDERS = "config.json"
-    OTHERS = "others"
+    CONFIG = "config.json"
 
     def __init__(self, watchDirectory=".", interval=5, observer=Observer()):
         self.watchDirectory = watchDirectory
@@ -43,7 +43,9 @@ class MonitorFolder(FileSystemEventHandler):
         self.observer = observer
 
         self.filename = ""
-        self.folders = json.load(open(MonitorFolder.FOLDERS))
+        self.include = json.load(open(MonitorFolder.CONFIG))["include"]
+        self.ignore = json.load(open(MonitorFolder.CONFIG))["ignore"]
+        self.others = json.load(open(MonitorFolder.CONFIG))["others"]
 
     def on_moved(self, event):
         super(MonitorFolder, self).on_moved(event)
@@ -52,38 +54,16 @@ class MonitorFolder(FileSystemEventHandler):
         logging.info("Moved %s: from %s to %s", what, event.src_path,
                      event.dest_path)
 
+        if what is 'file':
+            self.organize(event)
+
     def on_created(self, event):
         super(MonitorFolder, self).on_created(event)
 
         what = 'directory' if event.is_directory else 'file'
         logging.info("Created %s: %s", what, event.src_path)
 
-        if what is "file":
-            self.filename = event.src_path.split("\\")[-1]
-            assigned_folder = self.assign_folder(what)
-        elif what is "directory":
-            self.filename = event.src_path.split("\\")[-1]
-            assigned_folder = self.assign_folder(what)
-
-        try:
-            os.rename(
-                event.src_path,
-                os.path.join(
-                    assigned_folder,
-                    self.filename
-                )
-            )
-        except Exception as e:
-            logging.exception(e)
-            logging.debug(f"Creating directory - {assigned_folder}...")
-            os.mkdir(assigned_folder)
-            os.rename(
-                event.src_path,
-                os.path.join(
-                    assigned_folder,
-                    self.filename
-                )
-            )
+        self.organize(event)
 
     def on_deleted(self, event):
         super(MonitorFolder, self).on_deleted(event)
@@ -97,20 +77,69 @@ class MonitorFolder(FileSystemEventHandler):
         what = 'directory' if event.is_directory else 'file'
         logging.info("Modified %s: %s", what, event.src_path)
 
+    def organize(self, event):
+        if has_attribute(event, 'dest_path'):
+            file_path = event.dest_path
+        else:
+            file_path = event.src_path
+
+        what = 'directory' if event.is_directory else 'file'
+        if what is "file":
+            self.filename = file_path.split("\\")[-1]
+            assigned_folder = self.assign_folder(what)
+            if assigned_folder is None:
+                return
+        elif what is "directory":
+            self.filename = file_path.split("\\")[-1]
+            assigned_folder = self.assign_folder(what)
+
+        try:
+            os.rename(
+                file_path,
+                os.path.join(
+                    assigned_folder,
+                    self.filename
+                )
+            )
+
+        except FileExistsError as e:
+            logging.exception(e)
+            logging.error("File already exists. Cleaning up.")
+            os.remove(file_path)
+
+        except NotImplementedError as e:
+            logging.exception(e)
+            logging.debug(f"Creating directory - {assigned_folder}...")
+            os.mkdir(assigned_folder)
+            os.rename(
+                file_path,
+                os.path.join(
+                    assigned_folder,
+                    self.filename
+                )
+            )
+
     def assign_folder(self, what="file"):
-        self.folders = json.load(open(MonitorFolder.FOLDERS))
+        self.include = json.load(open(MonitorFolder.CONFIG))["include"]
+        self.ignore = json.load(open(MonitorFolder.CONFIG))["ignore"]
+        self.others = json.load(open(MonitorFolder.CONFIG))["others"]
 
         if what is 'file':
             extension = self.filename.split(".")[-1].lower()
             logging.info(f"File extension - {extension}")
-            try:
-                logging.debug(f"Folder assigned - {self.folders[extension]}")
-                return self.folders[extension]
-            except Exception as e:
-                logging.exception(e)
-                logging.error(
-                    "File extension not handled, using default folder.")
-                return self.folders[MonitorFolder.OTHERS]
+            if extension not in self.ignore:
+                try:
+                    logging.debug(
+                        f"Folder assigned - {self.include[extension]}")
+                    return self.include[extension]
+                except Exception as e:
+                    logging.exception(e)
+                    logging.error(
+                        "File extension not handled, using default folder.")
+                    return self.others
+            else:
+                logging.info("Extension ignored.")
+                return None
 
         if what is 'directory':
             dir_info = [
@@ -141,13 +170,13 @@ class MonitorFolder(FileSystemEventHandler):
                 return self.assign_folder(what)
 
             try:
-                logging.debug(f"Folder assigned - {self.folders[extension]}")
-                return self.folders[extension]
+                logging.debug(f"Folder assigned - {self.include[extension]}")
+                return self.include[extension]
             except Exception as e:
                 logging.exception(e)
                 logging.error(
                     "File extension not handled, using default folder.")
-                return self.folders[MonitorFolder.OTHERS]
+                return self.include[MonitorFolder.OTHERS]
 
     def run(self):
 

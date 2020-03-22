@@ -31,14 +31,20 @@ Monitor any folder and sort your files and folders inside it automatically
     - Structure
     ```json
         {
-            "extension-name": "path/to/folder/for/extension",
+            "include": {
+                "extension-name": "path/to/folder/for/extension"
+            },
+            "ignore": ["extension-name"],
             "others": "path/to/misc/folder"
         }
     ```
     - Example
     ```json
         {
-            "exe": "C:\\Users\\Username\\Downloads\\Software",
+            "include": {
+                "exe": "C:\\Users\\Username\\Downloads\\Software"
+            },
+            "ignore": ["tmp", "crdownload"],
             "others": "C:\\Users\\Username\\Downloads\\MISC"
         }
     ```
