@@ -1,0 +1,4 @@
+autopep8==1.5
+pathtools==0.1.2
+pycodestyle==2.5.0
+watchdog==0.10.2
