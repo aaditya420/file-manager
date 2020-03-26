@@ -3,37 +3,26 @@ import sys
 import time
 import json
 import logging
+import datetime
 import argparse
 from watchdog.utils import has_attribute
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-try:
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="[%(asctime)s - %(module)s - %(funcName)s - %(lineno)d - %(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(
-                "debug.log",
-                "a"
-            ),
-            logging.StreamHandler()
-        ]
-    )
-except Exception as e:
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="[%(asctime)s - %(module)s - %(funcName)s - %(lineno)d - %(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(
-                "debug.log",
-                "w"
-            ),
-            logging.StreamHandler()
-        ]
-    )
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="[%(asctime)s - %(processName)s - %(process)d - %(module)s - %(funcName)s - %(lineno)d - %(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(
+            "logs/debug_{}.log".format(datetime.datetime.now().strftime("%d_%m_%Y-%H_%M_%S_%f")),
+            "w"
+        ),
+        logging.StreamHandler()
+    ]
+)
 
-parser = argparse.ArgumentParser(description="Monitor a particular folder for file changes and sort them based on the config.json")
+parser = argparse.ArgumentParser(
+    description="Monitor a particular folder for file changes and sort them based on the config.json")
 
 parser.add_argument(
     '-wd', '--watchDirectory',
@@ -54,6 +43,7 @@ parser.add_argument(
     help="Interval in seconds to sleep the monitoring threads"
 )
 
+
 class MonitorFolder(FileSystemEventHandler):
 
     def __init__(self, watchDirectory=".", config="config.json", interval=5, observer=Observer()):
@@ -66,6 +56,7 @@ class MonitorFolder(FileSystemEventHandler):
         self.include = json.load(open(self.config))["include"]
         self.ignore = json.load(open(self.config))["ignore"]
         self.others = json.load(open(self.config))["others"]
+        self.all = self.include["*"] if "*" in self.include.keys() else None
 
     def on_moved(self, event):
         super(MonitorFolder, self).on_moved(event)
@@ -83,7 +74,7 @@ class MonitorFolder(FileSystemEventHandler):
         what = 'directory' if event.is_directory else 'file'
         logging.info("Created %s: %s", what, event.src_path)
 
-        self.organize(event)
+        # self.organize(event)
 
     def on_deleted(self, event):
         super(MonitorFolder, self).on_deleted(event)
@@ -96,6 +87,20 @@ class MonitorFolder(FileSystemEventHandler):
 
         what = 'directory' if event.is_directory else 'file'
         logging.info("Modified %s: %s", what, event.src_path)
+
+        if what == 'file':
+            try:
+                logging.debug("Copy started.")
+                historicalSize = -1
+                while (historicalSize != os.path.getsize(event.src_path)):
+                    historicalSize = os.path.getsize(event.src_path)
+                    time.sleep(self.interval)
+                logging.info("File copied!")
+                self.organize(event)
+            except Exception as e:
+                logging.exception(e)
+                return
+
 
     def organize(self, event):
         if has_attribute(event, 'dest_path'):
@@ -124,10 +129,19 @@ class MonitorFolder(FileSystemEventHandler):
 
         except FileExistsError as e:
             logging.exception(e)
-            logging.error("File already exists. Cleaning up.")
-            os.remove(file_path)
+            logging.error("File already exists. Renaming.")
+            os.rename(
+                file_path,
+                os.path.join(
+                    assigned_folder,
+                    "_".join([
+                        self.filename,
+                        datetime.datetime.now().strftime("%d_%m_%Y-%H_%M_%S")
+                    ])
+                )
+            )
 
-        except NotImplementedError as e:
+        except (NotImplementedError, FileNotFoundError) as e:
             logging.exception(e)
             logging.debug(f"Creating directory - {assigned_folder}...")
             os.mkdir(assigned_folder)
@@ -139,24 +153,34 @@ class MonitorFolder(FileSystemEventHandler):
                 )
             )
 
+        except Exception as e:
+            logging.exception(e)
+
     def assign_folder(self, what="file"):
         self.include = json.load(open(self.config))["include"]
         self.ignore = json.load(open(self.config))["ignore"]
         self.others = json.load(open(self.config))["others"]
+        self.all = self.include["*"] if "*" in self.include.keys() else None
 
         if what == 'file':
             extension = self.filename.split(".")[-1].lower()
             logging.info(f"File extension - {extension}")
             if extension not in self.ignore:
+                if self.all is not None:
+                    logging.debug(f"Folder assigned - {self.all}")
+                    return self.all
+                
                 try:
                     logging.debug(
-                        f"Folder assigned - {self.include[extension]}")
+                        f"Folder assigned - {self.include[extension]}"
+                    )
                     return self.include[extension]
                 except Exception as e:
                     logging.exception(e)
                     logging.error(
                         "File extension not handled, using default folder.")
                     return self.others
+            
             else:
                 logging.info("Extension ignored.")
                 return None
@@ -222,7 +246,7 @@ class MonitorFolder(FileSystemEventHandler):
         self.observer.join()
 
 
-if __name__ == "__main__":
+def main():
     env = ""
     try:
         logging.debug("Parsing arguments...")
@@ -232,5 +256,15 @@ if __name__ == "__main__":
         logging.exception(e)
         logging.error("Sorry, unable to prase arguments :(")
         parser.print_help()
-    
+
     MonitorFolder(**args).run()
+
+
+if __name__ == "__main__":
+    try:
+        logging.info("Started.")
+        main()
+        logging.info("Finished.")
+    except Exception as e:
+        logging.exception(e)
+        logging.error("Finished with errors.")
